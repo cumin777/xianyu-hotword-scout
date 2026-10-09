@@ -1,0 +1,8 @@
+# 运行时产物：数据库/cookies/报告/日志，永不进 git
+runtime/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/

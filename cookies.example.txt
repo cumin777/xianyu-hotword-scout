@@ -1,0 +1,7 @@
+# cookies 文件模板。
+# 真实文件是 research\runtime\cookies.txt（被 gitignore，永不进 git）。
+#
+# 用法：默认留空（匿名采集，多数情况够用）。
+# 若匿名不稳定（频繁 TOKEN_FAILED/空结果），用浏览器登录闲鱼小号后：
+#   F12 -> 网络 -> 任一 h5api.m.goofish.com 请求 -> 请求标头 -> cookie: 整行复制
+# 粘贴到 runtime\cookies.txt（一行，k1=v1; k2=v2; ... 格式）即可。
