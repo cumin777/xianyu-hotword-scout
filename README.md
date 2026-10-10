@@ -41,10 +41,22 @@ python selftest.py          # 环境自测（Python 3.10+，无需装任何包�
 2. **改关键词表**：`keywords.txt`，每行一个，`#` 开头是注释。这就是你的选品范围。
 3. **跑**：`python main.py`
 
-产出（都在 `runtime\`）：
+产出（默认都在 `runtime\`，可用环境变量整体重定，见下）：
 - `hot_keywords.txt` —— 每行一个关键词，按综合分降序。**机器消费格式，保持稳定**，直接给下游脚本读
 - `report_日期.md` —— 人看的日报：指标明细表、样本量警告、零在售提醒
 - `xianyu.db` —— 全部历史快照（SQLite，可用任意工具查）
+
+## 自定义产物路径
+
+设置环境变量即可把全部产物（db/报告/热词/cookies/日志）整体挪到你指定的目录：
+
+```
+set HOTWORD_SCOUT_RUNTIME=D:\data\hotword-scout
+```
+
+- `run_daily.bat` 自动认这个变量（日志也跟着走），定时任务里想换产物盘改系统环境变量即可
+- 换路径后已有的 `cookies.txt` / `xianyu.db` 记得一起搬过去，否则等于冷启动
+- 不设置 = 默认仓库内 `runtime\`，行为与旧版完全一致
 
 ## 定时运行（Windows 任务计划）
 

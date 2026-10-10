@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
 """research 模块全局配置：所有常量集中在这，想改行为先看这里。"""
+import os
 from pathlib import Path
 
 # ---------- 路径 ----------
 BASE_DIR = Path(__file__).resolve().parent            # research\
-RUNTIME_DIR = BASE_DIR / "runtime"                    # 运行时产物（gitignore）
+# 产物目录整体可重定：设置环境变量 HOTWORD_SCOUT_RUNTIME=D:\你的路径 即可
+# （db/报告/热词/cookies/日志全部跟过去；定时任务/编排脚本自由选盘，默认仍在仓库内）
+_rt_env = os.environ.get("HOTWORD_SCOUT_RUNTIME")
+RUNTIME_DIR = Path(_rt_env).resolve() if _rt_env else BASE_DIR / "runtime"
+RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = RUNTIME_DIR / "xianyu.db"
 COOKIE_PATH = RUNTIME_DIR / "cookies.txt"             # 空文件=匿名；上小号时整串替换
 SAMPLE_PATH = RUNTIME_DIR / "sample_search.json"      # 首次成功响应样本（--mock 回归用）
