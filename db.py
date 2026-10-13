@@ -1,7 +1,12 @@
 # -*- coding: utf-8 -*-
 """SQLite 存取层：建表 + 全部 SQL 封装。函数式风格，conn 由调用方显式传参。"""
+import re
 import sqlite3
 from pathlib import Path
+
+# 种子词行尾年份旁注（板绘教程@2026）：流水线元数据（restock 选链偏好，PLAN #11），
+# 不属于市场搜索词——读取时剥掉，输出 hot_keywords.txt 时再回填。
+_YEAR_TAG_RE = re.compile(r"@(20\d{2})\s*$")
 
 DDL = """
 -- 种子关键词表（与 keywords.txt 每日同步；txt 里删掉的词置 active=0，历史保留）
@@ -83,15 +88,35 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
 
 def load_keywords_from_file(path: Path) -> list[str]:
-    """读种子关键词文件：去空白、去注释、保序去重"""
+    """读种子关键词文件：去空白、去注释、保序去重。
+
+    行尾 `@2026` 年份旁注会先剥掉——裸词才进采集与打分（旁注是给下游
+    restock 选链用的元数据，不是市场搜索词）。
+    """
     words, seen = [], set()
     for line in path.read_text(encoding="utf-8").splitlines():
-        word = line.strip()
+        word = _YEAR_TAG_RE.sub("", line.strip()).strip()
         if not word or word.startswith("#") or word in seen:
             continue
         seen.add(word)
         words.append(word)
     return words
+
+
+def load_year_prefs(path: Path) -> dict[str, str]:
+    """种子文件 -> {裸词: 年份}，供 hot_keywords.txt 输出时回填旁注。文件缺失返回空。"""
+    prefs: dict[str, str] = {}
+    if not path.exists():
+        return prefs
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        m = _YEAR_TAG_RE.search(stripped)
+        if not m:
+            continue
+        word = _YEAR_TAG_RE.sub("", stripped).strip()
+        if word and not word.startswith("#"):
+            prefs[word] = m.group(1)
+    return prefs
 
 
 def sync_keywords(conn: sqlite3.Connection, words: list[str]) -> dict[str, int]:

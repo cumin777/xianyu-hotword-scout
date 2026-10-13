@@ -102,9 +102,14 @@ def write_outputs(conn, scored: list[dict], zeros: list[dict], meta: dict,
                   items_saved: int = 0) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1) 机器消费：只要关键词，分数降序
+    # 1) 机器消费：只要关键词，分数降序。种子词带年份旁注的回填（restock 选链偏好）
+    prefs = db.load_year_prefs(config.KEYWORDS_FILE)
     hot_path = out_dir / "hot_keywords.txt"
-    hot_path.write_text("\n".join(r["keyword"] for r in scored) + ("\n" if scored else ""),
+    hot_lines = [
+        r["keyword"] + (f"@{prefs[r['keyword']]}" if r["keyword"] in prefs else "")
+        for r in scored
+    ]
+    hot_path.write_text("\n".join(hot_lines) + ("\n" if scored else ""),
                         encoding="utf-8")
 
     # 2) 人读日报
