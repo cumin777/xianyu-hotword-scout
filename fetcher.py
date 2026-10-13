@@ -43,6 +43,10 @@ class BaseFetcher(abc.ABC):
     def get_want(self, item_id: str) -> int | None:
         """单个商品想要数（走详情接口）。失败返回 None；风控抛 CaptchaError。"""
 
+    def suggest(self, keyword: str) -> list[str]:
+        """搜索联想词（买家下拉真实搜索词，滚雪球源②）。默认不支持=空。"""
+        return []
+
 
 class HttpFetcher(BaseFetcher):
     def __init__(self, cookie_path: Path):
@@ -133,6 +137,45 @@ class HttpFetcher(BaseFetcher):
                 return None
         return None
 
+    def suggest(self, keyword: str) -> list[str]:
+        """搜索联想接口（滚雪球源②）：data.items[].suggest = 买家下拉真实搜索词。
+
+        调用形状取自 goofish.com PC 端 p_layout.js（2026-10 实测 SUCCESS）。
+        失败返回 []（联想是候选来源之一，挂了不该毁采集）；风控抛 CaptchaError。
+        """
+        data = dict(config.SUGGEST_DATA_TEMPLATE)
+        data["inputWords"] = keyword
+        data_str = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+        token_attempts = config.TOKEN_RETRY + 1
+        for attempt in range(token_attempts):
+            resp, err = self._mtop_request("mtop.taobao.idlemtopsearch.pc.search.suggest",
+                                           config.SUGGEST_API_URL, data_str,
+                                           "a21ybx.search.0.0")
+            if err == "NETWORK":
+                return []
+            try:
+                body = resp.json()
+            except ValueError:
+                return []
+            ret = ";".join(body.get("ret") or [])
+            if any(e in ret for e in _TOKEN_ERRORS):
+                if attempt + 1 < token_attempts:
+                    time.sleep(1)
+                    continue
+                return []
+            if "FAIL_SYS_USER_VALIDATE" in ret or "rgv587" in resp.text.lower() \
+                    or "deny_h5" in resp.text.lower():
+                raise CaptchaError(f"联想 {keyword} 命中风控: {ret[:60]}")
+            if not ret.startswith("SUCCESS"):
+                return []
+            try:
+                items = body["data"]["items"]
+            except (KeyError, TypeError):
+                return []
+            return [it["suggest"] for it in items
+                    if isinstance(it, dict) and it.get("suggest")]
+        return []
+
     def _mtop_request(self, api: str, url: str, data_str: str, spm_cnt: str):
         """发一次签名 mtop 请求（搜索/详情共用）。网络错误重试 NETWORK_RETRY 次。"""
         for i in range(config.NETWORK_RETRY + 1):
@@ -183,6 +226,9 @@ class MockFetcher(BaseFetcher):
 
     def get_want(self, item_id: str) -> int | None:
         return 100   # 固定值：回归只验证链路，不验证数值
+
+    def suggest(self, keyword: str) -> list[str]:
+        return ["剪辑教程合集", "剪辑素材包"]   # 固定联想词：离线走通源②链路
 
 
 if __name__ == "__main__":

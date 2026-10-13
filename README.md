@@ -11,6 +11,7 @@
 | 搜索接口 `mtop.taobao.idlemtopsearch.pc.search/1.0` | ✅ 可用，**需登录 cookies**（匿名直调已被 `RGV587_ERROR::SM` 风控拦截，换 UA 无效） |
 | **搜索列表的想要数** | ❌ **2026 起已清空**：`clickParam.args.wantNum` 恒 `"0"`、`exContent.want` 恒空串（2024-2025 的老教程/老项目都在吃这个坑） |
 | 想要数正确来源 | ✅ 详情接口 `mtop.taobao.idle.pc.detail/1.0` 的 `data.itemDO.wantCnt`，本工具按此实现 |
+| 搜索联想 `mtop.taobao.idlemtopsearch.pc.search.suggest/1.0` | ✅ 可用（2026-10 实测，PC 端下拉联想；data: `{inputWords, searchReqFromPage:"xyPcHome", bucketId:30, type:0}`，取 `data.items[].suggest`） |
 | 搜索接口 v2（`/2.0/`） | ❌ 不存在（`FAIL_SYS_API_NOT_FOUNDED`） |
 | 请求头 | ⚠️ 精简到 4 项即可；多余的 `Sec-Fetch-*` 头会触发风控超时 |
 | 签名 | 标准 h5 mtop：`md5(token & t & appKey34839810 & data)`，token 取 cookie `_m_h5_tk` 下划线前段 |
@@ -65,6 +66,26 @@ schtasks /Create /TN "xianyu-hotword-scout" /TR "D:\你的路径\xianyu-hotword-
 ```
 
 Linux 用 crontab 等价替换即可（脚本本身无 Windows 依赖，bat 只是包装）。
+
+## 滚雪球自动选词（snowball.py，2026-10-13）
+
+只维护**种子锚点词**（keywords.txt），其余交给词池自演化：自动找词 → 试爬验证 → 达标转正 → 弱势淘汰。`config.SNOWBALL_ENABLED=False` 可回到老行为（只爬种子词、全量出榜）。
+
+```
+三源候选                     四道门槛                  状态机
+① 快照标题 n-gram(主力)  →   词形 2~8字去泛词/去碎片 →  trial 试爬 3 天
+② 搜索联想(买家真实词)  →   平台红线黑名单            日均在售≥50 且 供需比≥1 → active
+③ 自家品反馈(想要数涨)  →   同市场去重(词形+命中集)   trial 不达标 / active 连续5天弱 → retired
+                             热度证据(≥10 商品命中)    雪球 active 池上限 40，满员末位让位
+```
+
+- **节奏**：每日新进 trial ≤ 5 词（词数=请求量）；联想接口只对当日榜单前 8 词各调 1 次
+- **准入排序**：反馈加权的钱方向 > 更具体的市场短语（密度=想要数/命中数，宽词分数天然更高，按分会选宽弃专）> 联想补位
+- **出词**：`hot_keywords.txt` 只出 active 池复合分 Top-M（默认 6，trial 不出品），种子词年份旁注照旧回填
+- **副产物**：`ngram_top.txt` 当日高频修饰词（宽口径，泛词/真题正是修饰词），喂下游文案标题带搜索长尾
+- **反馈闭环**：自家的 publish_log（jsonl：`item_id/title/ts`）与每日快照交叉，想要数上涨的品其标题词加权扩张——雪往钱多处滚。路径按优先级：环境变量 `HOTWORD_SCOUT_PUBLISH_LOG` > config 直配 > `RUNTIME_DIR` 兄弟目录 `publisher\publish_log.jsonl`（配合 xianyu-pipeline 布局免配置）；都没有 = 该源自动关闭
+- 种子词（source=seed）不进状态机、不占池上限、永不被机器淘汰；keywords.txt 里删掉的种子才退役
+- 所有旋钮集中在 `config.py` 滚雪球段；离线回归 `python test_snowball.py`（挖词/门槛/反馈/状态机/出品全链不出网）
 
 ## 指标口径
 

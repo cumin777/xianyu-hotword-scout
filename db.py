@@ -9,11 +9,16 @@ from pathlib import Path
 _YEAR_TAG_RE = re.compile(r"@(20\d{2})\s*$")
 
 DDL = """
--- 种子关键词表（与 keywords.txt 每日同步；txt 里删掉的词置 active=0，历史保留）
+-- 种子关键词表（与 keywords.txt 每日同步；滚雪球词由状态机管理，不受 txt 影响）
+-- state: trial(试爬) / active(正式) / retired(退役，历史保留)；source: seed(锚点) 或发现来源
 CREATE TABLE IF NOT EXISTS keywords (
     keyword_id  INTEGER PRIMARY KEY AUTOINCREMENT,
     keyword     TEXT NOT NULL UNIQUE,
-    active      INTEGER NOT NULL DEFAULT 1,
+    active      INTEGER NOT NULL DEFAULT 1,   -- =1 当日采集（state 为 trial/active 的词）
+    source      TEXT NOT NULL DEFAULT 'seed',
+    state       TEXT NOT NULL DEFAULT 'active',
+    state_since TEXT,                         -- 进入当前状态的日期（trial 计天用）
+    note        TEXT,                         -- 溯源：候选分/命中数/来源市场
     created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 
@@ -85,6 +90,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "want_sampled_n" not in cols:
         conn.execute("ALTER TABLE daily_keyword_stats ADD COLUMN want_sampled_n INTEGER")
         conn.execute("ALTER TABLE daily_keyword_stats ADD COLUMN want_sampled_avg REAL")
+    # 滚雪球词池（PLAN #7）：老库 keywords 全是种子词，默认值即正确语义
+    kcols = {r[1] for r in conn.execute("PRAGMA table_info(keywords)")}
+    for col, ddl in (("source", "TEXT NOT NULL DEFAULT 'seed'"),
+                     ("state", "TEXT NOT NULL DEFAULT 'active'"),
+                     ("state_since", "TEXT"),
+                     ("note", "TEXT")):
+        if col not in kcols:
+            conn.execute(f"ALTER TABLE keywords ADD COLUMN {col} {ddl}")
 
 
 def load_keywords_from_file(path: Path) -> list[str]:
@@ -120,30 +133,81 @@ def load_year_prefs(path: Path) -> dict[str, str]:
 
 
 def sync_keywords(conn: sqlite3.Connection, words: list[str]) -> dict[str, int]:
-    """keywords.txt -> keywords 表。返回 {关键词: keyword_id}。
+    """keywords.txt（种子锚点词）-> keywords 表。返回 {种子词: keyword_id}。
 
-    新词插入；表里有但 txt 里没有的置 active=0（历史数据保留，不再采集）。
+    只管理 source='seed' 的行：新种子插入；txt 里删掉的种子退役（retired，历史保留）。
+    滚雪球词（source!=seed）不归 txt 管，由 snowball 状态机独立维护。
     """
     for word in words:
         conn.execute(
-            "INSERT INTO keywords(keyword) VALUES(?) "
-            "ON CONFLICT(keyword) DO UPDATE SET active=1",
+            "INSERT INTO keywords(keyword, source, state, state_since, active) "
+            "VALUES(?, 'seed', 'active', date('now', 'localtime'), 1) "
+            "ON CONFLICT(keyword) DO UPDATE SET active=1, state='active', source='seed'",
             (word,),
         )
-    txt_set = set(words)
-    if txt_set:
-        conn.execute("UPDATE keywords SET active=0 WHERE keyword NOT IN (%s)"
-                     % ",".join("?" * len(txt_set)), tuple(txt_set))
-    else:
-        conn.execute("UPDATE keywords SET active=0")   # txt 空了：全部停采（一般不会发生）
+    if words:
+        conn.execute(
+            "UPDATE keywords SET active=0, state='retired', "
+            "state_since=date('now', 'localtime') "
+            "WHERE source='seed' AND keyword NOT IN (%s)" % ",".join("?" * len(words)),
+            tuple(words),
+        )
     conn.commit()
-    rows = conn.execute("SELECT keyword_id, keyword FROM keywords").fetchall()
+    rows = conn.execute("SELECT keyword_id, keyword FROM keywords WHERE source='seed'").fetchall()
     return {r["keyword"]: r["keyword_id"] for r in rows}
 
 
-def get_active_keywords(conn: sqlite3.Connection) -> dict[str, int]:
-    rows = conn.execute("SELECT keyword_id, keyword FROM keywords WHERE active=1").fetchall()
+# ---------- 滚雪球词池（PLAN #7） ----------
+
+def get_crawl_words(conn: sqlite3.Connection) -> dict[str, int]:
+    """当日要爬的词 = 全部 active + trial（种子词 state 恒为 active，天然包含）。"""
+    rows = conn.execute(
+        "SELECT keyword_id, keyword FROM keywords WHERE state IN ('active', 'trial')"
+    ).fetchall()
     return {r["keyword"]: r["keyword_id"] for r in rows}
+
+
+def get_all_words(conn: sqlite3.Connection) -> list:
+    """词池全景（含 retired——候选同市场去重要对全部历史词做，防退役词反复回炉）。"""
+    return conn.execute(
+        "SELECT keyword_id, keyword, source, state, state_since, note FROM keywords"
+    ).fetchall()
+
+
+def get_snowball_actives(conn: sqlite3.Connection) -> list:
+    """雪球 active 词（不含种子——种子不占池、不可被末位淘汰）。"""
+    return conn.execute(
+        "SELECT keyword_id, keyword, state_since FROM keywords "
+        "WHERE state='active' AND source != 'seed'"
+    ).fetchall()
+
+
+def add_snowball_words(conn: sqlite3.Connection, entries: list[tuple[str, str, str]],
+                       run_date: str) -> list[str]:
+    """新词进 trial。entries = [(word, source, note)]。返回实际插入的词（重名跳过）。"""
+    inserted = []
+    for word, source, note in entries:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO keywords(keyword, source, state, state_since, note, active) "
+            "VALUES(?, ?, 'trial', ?, ?, 1)",
+            (word, source, run_date, note),
+        )
+        if cur.rowcount > 0:
+            inserted.append(word)
+    conn.commit()
+    return inserted
+
+
+def set_word_state(conn: sqlite3.Connection, kw_id: int, state: str,
+                   run_date: str, note: str | None = None) -> None:
+    """状态机迁移：state/state_since/active 一起翻（retired 即停采）。note=None 保留原值。"""
+    conn.execute(
+        "UPDATE keywords SET state=?, state_since=?, active=?, "
+        + ("note=?" if note is not None else "note=note") + " WHERE keyword_id=?",
+        (state, run_date, 1 if state in ("active", "trial") else 0,
+         *([] if note is None else [note]), kw_id),
+    )
+    conn.commit()
 
 
 def start_run(conn: sqlite3.Connection, run_date: str) -> int:
@@ -216,9 +280,9 @@ def upsert_stats(conn: sqlite3.Connection, run_date: str, keyword_id: int,
 
 
 def get_stats_rows(conn: sqlite3.Connection, run_date: str) -> list:
-    """当日全部关键词的聚合行（打分用），附带关键词文本"""
+    """当日全部关键词的聚合行（打分用），附带关键词文本与词池状态（出榜过滤用）"""
     return conn.execute(
-        "SELECT s.*, k.keyword FROM daily_keyword_stats s "
+        "SELECT s.*, k.keyword, k.source, k.state, k.state_since FROM daily_keyword_stats s "
         "JOIN keywords k USING(keyword_id) WHERE s.crawl_date=?",
         (run_date,),
     ).fetchall()
@@ -252,11 +316,39 @@ def get_first_collected_date(conn: sqlite3.Connection) -> str | None:
 
 
 def get_recent_stats(conn: sqlite3.Connection, keyword_id: int, days: int = 7) -> list:
-    """某词最近 N 天聚合行（含今天），按日期倒序——算连续 0 在售天数用"""
+    """某词最近 N 天聚合行（含今天），按日期倒序——算连续 0 在售/连续弱势天数用"""
     return conn.execute(
-        "SELECT crawl_date, item_count FROM daily_keyword_stats "
+        "SELECT crawl_date, item_count, want_total FROM daily_keyword_stats "
         "WHERE keyword_id=? ORDER BY crawl_date DESC LIMIT ?",
         (keyword_id, days),
+    ).fetchall()
+
+
+def get_stats_since(conn: sqlite3.Connection, keyword_id: int, since: str) -> list:
+    """某词自 since（含）以来的聚合行，按日期正序——trial 评估用（state_since 起）。"""
+    return conn.execute(
+        "SELECT crawl_date, item_count, want_total FROM daily_keyword_stats "
+        "WHERE keyword_id=? AND crawl_date>=? ORDER BY crawl_date",
+        (keyword_id, since),
+    ).fetchall()
+
+
+# ---------- 滚雪球挖词/反馈用的快照查询 ----------
+
+def get_titles_for_date(conn: sqlite3.Connection, run_date: str) -> list:
+    """当日全部快照的 (item_id, title, want_count)——n-gram 挖词原料。"""
+    return conn.execute(
+        "SELECT item_id, title, want_count FROM item_snapshots WHERE crawl_date=?",
+        (run_date,),
+    ).fetchall()
+
+
+def get_item_wants(conn: sqlite3.Connection, item_id: str) -> list[tuple]:
+    """某商品 (crawl_date, want_count) 全历史，日期倒序——自家品想要数走势。"""
+    return conn.execute(
+        "SELECT crawl_date, want_count FROM item_snapshots "
+        "WHERE item_id=? ORDER BY crawl_date DESC",
+        (item_id,),
     ).fetchall()
 
 

@@ -17,6 +17,7 @@ import config
 import crawler
 import db
 import metrics
+import snowball
 from fetcher import HttpFetcher, MockFetcher
 
 
@@ -36,8 +37,10 @@ def main() -> int:
     summary, run_status, exit_code = None, "", 0
 
     if not args.score_only:
+        # 种子锚点词同步（txt 删掉的种子退役）；采集集合 = active + trial（滚雪球词池）
         words = db.load_keywords_from_file(config.KEYWORDS_FILE)
-        keywords = db.sync_keywords(conn, words)
+        db.sync_keywords(conn, words)
+        keywords = db.get_crawl_words(conn)
 
         run_id = db.start_run(conn, run_date)
         fetcher = MockFetcher(config.SAMPLE_PATH) if args.mock else HttpFetcher(config.COOKIE_PATH)
@@ -76,12 +79,27 @@ def main() -> int:
     # 指标与输出——采集熔断/部分失败也照常出报告（半量好过没有）
     out_dir = mock_dir if args.mock else config.RUNTIME_DIR
     metrics.build_daily_stats(conn, run_date)
+
+    # 滚雪球（采集+聚合后：状态机用当日真实数据，挖词用当日快照；失败降级不毁榜单）
+    sb = None
+    if config.SNOWBALL_ENABLED and not args.score_only:
+        try:
+            sb = snowball.run(conn, fetcher, run_date, out_dir=out_dir if args.mock else None)
+            print(f"[滚雪球] 词池 种子{sb.pool.get('seed', 0)}+雪球active"
+                  f"{sb.pool.get('active', 0)}/{config.ACTIVE_POOL_CAP} "
+                  f"+trial{sb.pool.get('trial', 0)}；新进 trial {len(sb.admits)} 词，"
+                  f"状态机动作 {len(sb.transitions)} 次"
+                  + (f"；联想源降级: {sb.suggest_error}" if sb.suggest_error else ""))
+        except Exception as e:
+            print(f"[滚雪球] 失败（榜单照常，明日重试）: {type(e).__name__}: {e}")
+
     scored, zeros, meta = metrics.compute_scores(conn, run_date)
     metrics.write_outputs(conn, scored, zeros, meta, run_date, out_dir,
                           run_status=run_status or "(score-only)",
                           kw_ok=summary.keywords_ok if summary else len(scored),
                           kw_total=summary.keywords_total if summary else len(scored) + len(zeros),
-                          items_saved=summary.items_saved if summary else 0)
+                          items_saved=summary.items_saved if summary else 0,
+                          sb=sb)
     print(f"[输出] 榜单 {len(scored)} 词 -> {out_dir / 'hot_keywords.txt'}")
     print(f"[输出] 日报 -> {out_dir / f'report_{run_date}.md'}")
     return exit_code
