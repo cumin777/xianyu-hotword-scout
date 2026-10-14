@@ -38,10 +38,23 @@ import config
 import db
 from fetcher import BaseFetcher
 
+try:
+    import jieba                                  # 可选依赖：词级挖掘（2026-10-14 实测
+    import jieba.posseg as _pseg                  # 字符窗 5 进 5 全是跨词碎片，装它治本）
+except ImportError:
+    jieba = None
+    _pseg = None
+
+
+def _flag_ok(flag: str) -> bool:
+    """市场词必是名词性收尾（教程/资料/工作流/brushset）：n*/v*/a*/eng 放行，
+    副词/方位/连词/代词收尾（"不是外面""怎么用"）一律不是市场词。"""
+    return flag.startswith(("n", "v", "a")) or flag == "eng"
+
 
 # ---------- 词形/市场口径（与 publisher copywriter 同源语义，独立实现保持开源自包含） ----------
 
-_SEP_RE = re.compile(r"[\s\-_/，。·.、+【】\[\]()（）!！?？~～*#@\"'“”‘’]+")
+_SEP_RE = re.compile(r"[\s\-_/，。·.、+【】\[\]()（）!！?？~～*#@\"'“”‘’|｜;；:：]+")
 _CJK_RE = re.compile(r"[一-鿿]")
 _ALPHA_RE = re.compile(r"[a-z]")
 _DIGIT_RE = re.compile(r"[0-9]")
@@ -108,31 +121,66 @@ def _iter_ngrams(text: str):
             yield text[i:i + n]
 
 
+def _title_grams(title: str):
+    """标题 -> gram 迭代器。
+
+    装了 jieba 走词级：1~3 个连续词拼合（总长 2~8 字），标点/纯数字 token 断链
+    ——从根上避开"程实操资/月蕞新a"式跨词边界碎片（2026-10-14 首日实测：字符窗
+    5 进 5 全是碎片，滚雪球空转）。没装则回落 2~4 字符滑窗（零依赖承诺不破）。
+    """
+    if config.SNOWBALL_USE_JIEBA and jieba is not None:
+        # 词级 gram：1~3 个连续词拼合（总长 2~8）。单字 token（jieba 对"工作流全流程"
+        # 这类连排会吐单字）与数字/标点一样断链——拼进去会再造"程实操资"式伪词；
+        # 收尾 token 词性不过 _flag_ok 的不产 gram（"不是外面"式话术碎片）。
+        if _pseg is not None:
+            toks = [None if len(w) < 2 or w.isdigit()
+                    or not (_CJK_RE.search(w) or _ALPHA_RE.search(w))
+                    else (w.lower(), f) for w, f in _pseg.cut(title)]
+        else:
+            toks = [None if len(t) < 2 or t.isdigit()
+                    or not (_CJK_RE.search(t) or _ALPHA_RE.search(t))
+                    else (t.lower(), "n") for t in jieba.cut(title)]
+        for i, t in enumerate(toks):
+            if t is None:
+                continue
+            gram = ""
+            for j in range(i, min(i + 3, len(toks))):    # 最多 3 个连续词
+                if toks[j] is None:
+                    break
+                gram += toks[j][0]
+                if len(gram) > config.CAND_MAX_CHARS:
+                    break
+                if len(gram) >= config.CAND_MIN_CHARS and _flag_ok(toks[j][1]):
+                    yield gram
+    else:
+        t = norm_word(title)
+        if len(t) >= config.NGRAM_MIN_LEN:
+            yield from _iter_ngrams(t)
+
+
 def mine_ngrams(conn, run_date: str, winners: set[str] | None = None
                 ) -> tuple[list[Candidate], list[tuple[str, float, int]], dict]:
     """当日快照标题 -> (候选列表, 高频修饰词表, 门槛前剔除计数)。
 
-    候选按"命中商品集"聚类（同市场判据对同短语碎片失灵——"ai绘画"/"i绘画变"
-    两两可以不共享 2 字，但命中集完全相同）：同集=同短语族只留代表（字多者）。
-    词形/泛词/黑名单四道门槛不在此吞掉——低命中族折进 pre_rejects['热度不足']，
-    其余原样交 gate 计数，日报的门槛统计才不失真；同市场去重（簇内留强且具体）
-    也在 admit 侧统一做。
+    候选按"命中商品集"聚类（同市场判据对同短语碎片失灵）：同集=同短语族只留代表
+    （字多/无数字/字典序，显式定序——set 哈希序跨运行不稳）。四道门槛与计数在
+    admit 侧 gate 统一做；此处的 pre_rejects 只收三类结构性剔除：热度不足
+    （<NGRAM_MIN_HITS 商品命中）、跨市场（命中横跨 >=CAND_MAX_KEYWORD_SPREAD 个
+    在爬词 = "自动发货/烂大街的"式通用语，不是市场词）、修饰词不受跨市场过滤
+    （通用语恰是好的标题修饰词）。
     winners = 反馈命中的自家品标题集合：候选词出现在其中 -> tier=1（钱方向优先）。
-    修饰词表门槛更宽（泛词/真题/冲刺正是要的修饰词）：黑名单 + 长度 + 半数热度。
     """
-    rows = [(r["item_id"], r["title"], r["want_count"])
+    rows = [(r["item_id"], r["title"], r["want_count"], r["keyword_id"])
             for r in db.get_titles_for_date(conn, run_date)]
-    want_map = {item_id: want for item_id, _, want in rows}
+    want_map = {item_id: want for item_id, _, want, _ in rows}
+    kw_map = {item_id: kw_id for item_id, _, _, kw_id in rows}
     hits: dict[str, set] = {}
-    for item_id, title, _ in rows:
-        t = norm_word(title or "")
-        if len(t) < config.NGRAM_MIN_LEN:
-            continue
-        for gram in set(_iter_ngrams(t)):
+    for item_id, title, _, _ in rows:
+        for gram in set(_title_grams(title)):
             hits.setdefault(gram, set()).add(item_id)
 
     winners = winners or set()
-    # ---- 修饰词表（宽口径，独立于候选门槛） ----
+    # ---- 修饰词表（宽口径，独立于候选门槛；不做跨市场过滤） ----
     modifiers: list[tuple[str, float, int]] = []
     for gram, ids in hits.items():
         if gram.isdigit() or (not _CJK_RE.search(gram) and not _ALPHA_RE.search(gram)):
@@ -144,21 +192,22 @@ def mine_ngrams(conn, run_date: str, winners: set[str] | None = None
     modifiers = _dedup_modifiers(modifiers)
     modifiers.sort(key=lambda m: (-m[1], -len(m[0])))
 
-    # ---- 候选（窄口径）：命中集聚类 -> 族代表（四道门槛在 admit 侧 gate 统一计数） ----
+    # ---- 候选（窄口径）：命中集聚类 -> 族代表 ----
     families: dict[frozenset, list[str]] = {}
-    pre_rejects = {"热度不足": 0}
+    pre_rejects = {"热度不足": 0, "跨市场": 0}
     for gram, ids in hits.items():
         if gram.isdigit() or (not _CJK_RE.search(gram) and not _ALPHA_RE.search(gram)):
             continue
         if len(ids) < config.NGRAM_MIN_HITS:
             pre_rejects["热度不足"] += 1
             continue
+        if len({kw_map[i] for i in ids}) >= config.CAND_MAX_KEYWORD_SPREAD:
+            pre_rejects["跨市场"] += 1
+            continue
         families.setdefault(frozenset(ids), []).append(gram)
     cands: list[Candidate] = []
     for ids, grams in families.items():
         score = float(sum(want_map.get(i) or 0 for i in ids))
-        # 同集同分（分=集上想要数和）-> 留字多的；并列留无数字的；再并列按字典序
-        # （set 哈希序跨运行不稳，必须显式定序；"7考研英"这类数字碎片让位纯文字短语）
         best = max(grams, key=lambda g: (len(g), _DIGIT_RE.search(g) is None, g))
         cands.append(Candidate(word=best, source="ngram", score=score, hits=len(ids),
                                ids=frozenset(ids),

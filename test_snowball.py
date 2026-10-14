@@ -78,6 +78,10 @@ def crawl_and_run(conn, fetcher, day, kw_snapshots: dict):
 def main() -> int:
     os.environ["HOTWORD_SCOUT_PUBLISH_LOG"] = str(PUBLISH_LOG)
 
+    # 状态机/门槛回归固定走字符窗路径（合成语料按字符窗构造，不依赖 jieba 是否安装）
+    jieba_backup = config.SNOWBALL_USE_JIEBA
+    config.SNOWBALL_USE_JIEBA = False
+
     conn = db.get_conn(DB_PATH)
     db.init_db(conn)
     db.sync_keywords(conn, SEEDS)
@@ -187,6 +191,23 @@ def main() -> int:
     report = (TMP / "report_2026-10-13.md").read_text(encoding="utf-8")
     assert "滚雪球词池" in report and "状态机" in report
     print(f"出品 Top-M: {hot}")
+
+    # ---------- jieba 词级挖掘（装了才跑）：碎片/话术不进 gram，标点数字断链 ----------
+    try:
+        if snowball.jieba is not None:
+            config.SNOWBALL_USE_JIEBA = True       # 本块强制走词级路径（前面机器测试固定字符窗）
+            grams = set(snowball._title_grams("AI短剧工作流全流程实操资料"))
+            assert "程实操资" not in grams, grams             # 跨词边界碎片（2026-10-14 实踩）
+            assert any(("实操" in g or "资料" in g) and len(g) >= 2 for g in grams), grams
+            grams2 = set(snowball._title_grams("全流程|实操资料 10月更新"))
+            assert all("|" not in g and "10" not in g for g in grams2), grams2
+            grams3 = set(snowball._title_grams("不是外面那种烂大街的资料"))
+            assert "不是外面" not in grams3 and "不是" not in grams3, grams3  # 话术碎片（词性收尾过滤）
+            print("jieba 词级挖掘 ✓")
+        else:
+            print("jieba 未安装，跳过词级路径（回落字符窗）")
+    finally:
+        config.SNOWBALL_USE_JIEBA = jieba_backup
 
     print("\n全部断言通过 ✅")
     shutil.rmtree(TMP, ignore_errors=True)

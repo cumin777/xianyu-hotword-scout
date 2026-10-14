@@ -336,9 +336,10 @@ def get_stats_since(conn: sqlite3.Connection, keyword_id: int, since: str) -> li
 # ---------- 滚雪球挖词/反馈用的快照查询 ----------
 
 def get_titles_for_date(conn: sqlite3.Connection, run_date: str) -> list:
-    """当日全部快照的 (item_id, title, want_count)——n-gram 挖词原料。"""
+    """当日全部快照的 (item_id, title, want_count, keyword_id)——n-gram 挖词原料
+    （keyword_id 供滚雪球算候选的跨市场散布度）。"""
     return conn.execute(
-        "SELECT item_id, title, want_count FROM item_snapshots WHERE crawl_date=?",
+        "SELECT item_id, title, want_count, keyword_id FROM item_snapshots WHERE crawl_date=?",
         (run_date,),
     ).fetchall()
 
