@@ -120,6 +120,6 @@ FEEDBACK_BOOST = 3.0                 # 反馈命中的候选分数乘数（雪�
 FEEDBACK_MAX_AGE_DAYS = 60           # 只看发布距今 N 天内的自家品（太老的市场信号过期）
 
 # 出词与联动
-TOP_M_OUTPUT = 6                     # hot_keywords.txt 只出 active 复合分 Top-M（给 restock）
+TOP_M_OUTPUT = 10                    # hot_keywords.txt 只出 active 复合分 Top-M（给 restock）；2026-10-15 6→10：8 锚点抢 6 位，用户新加的词被裁出不了货
 NGRAM_TOP_PATH = RUNTIME_DIR / "ngram_top.txt"   # 当日高频修饰词表（喂 copywriter 标题长尾）
 NGRAM_TOP_N = 40                     # 修饰词表条数（门槛比候选宽：泛词/真题/冲刺正是要的修饰词）
