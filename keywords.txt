@@ -23,7 +23,6 @@ AE教程
 达芬奇调色
 视频剪辑素材
 手机剪辑教程
-vlog教程
 短视频运营
 小红书运营
 抖音运营
@@ -40,16 +39,12 @@ AI漫画
 即梦教程
 可灵教程
 midjourney
-midjourney教程
 stable diffusion
 AI绘画教程
 AI绘画素材
-runway教程
 AI视频教程
 AI配音
 数字人教程
-AI提示词
 comfyui模型
 AI分镜
-短剧提示词
 图生视频
