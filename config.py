@@ -80,6 +80,9 @@ ZERO_RESULT_ALERT_DAYS = 3          # 连续 N 天 0 在售 → 报告提醒人�
 # 出词：hot_keywords.txt 只出 active 池复合分 Top-M（原来全量透传）。
 SNOWBALL_ENABLED = True             # 总开关：False = 老行为（只爬种子词，全量出榜）
 MAX_NEW_WORDS_PER_DAY = 5           # 每日新进 trial 词数上限（词数=请求量，RGV587 教训）
+SNOWBALL_ADMIT_NEW = False          # 2026-10-26 用户关闭新词挖掘：闲鱼在售上限 ~50，先消化存量+调研批。
+                                     # 只停"新候选进 trial"；trial 判定/active 末位淘汰/修饰词表照常。
+                                     # 想再开挖掘改 True 即可。
 ACTIVE_POOL_CAP = 40                # 雪球 active 词池上限（种子锚点词不计入、不可被淘汰）
 TRIAL_DAYS = 3                      # trial 试爬天数（有数据的天数，够了才评估）
 TRIAL_MIN_ITEMS = 50                # trial 达标①：日均在售数（有竞争=有市场；2页60条可见）
@@ -130,6 +133,6 @@ FEEDBACK_BOOST = 3.0                 # 反馈命中的候选分数乘数（雪�
 FEEDBACK_MAX_AGE_DAYS = 60           # 只看发布距今 N 天内的自家品（太老的市场信号过期）
 
 # 出词与联动
-TOP_M_OUTPUT = 25                    # hot_keywords.txt 只出 active 复合分 Top-M（给 restock）；2026-10-15 6→10：8 锚点抢 6 位，用户新加的词被裁出不了货
+TOP_M_OUTPUT = 60                    # hot_keywords.txt 只出 active 复合分 Top-M（给 restock）；2026-10-26 25→60：调研批加 37 词后 active 将至 ~53，25 会让过半新词出不了货
 NGRAM_TOP_PATH = RUNTIME_DIR / "ngram_top.txt"   # 当日高频修饰词表（喂 copywriter 标题长尾）
 NGRAM_TOP_N = 40                     # 修饰词表条数（门槛比候选宽：泛词/真题/冲刺正是要的修饰词）

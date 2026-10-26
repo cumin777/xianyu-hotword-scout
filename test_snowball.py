@@ -42,13 +42,13 @@ def rec(iid, title, want):
 
 
 def day1_titles():
-    """PPT模板 词下的合成市场：考研英语×12（主力）、AI绘画变现×10（反馈用）、
+    """PPT模板 词下的合成市场：考研英语×12（主力）、AI绘画副业×10（反馈用）、
     网课×3（黑名单）、资料大全×15（纯泛词）。剪辑教程 下垫噪声。"""
     ppt, jj = [], []
     for i in range(12):
         ppt.append(rec(f"a{i:03d}", f"2027考研英语真题手译{i}本", 30 + i))
     for i in range(10):
-        ppt.append(rec(f"b{i:03d}", f"AI绘画变现课{i}节", 5))
+        ppt.append(rec(f"b{i:03d}", f"AI绘画副业课{i}节", 5))
     for i in range(3):
         ppt.append(rec(f"c{i:03d}", f"考研网课资源{i}", 99))
     for i in range(15):
@@ -56,7 +56,7 @@ def day1_titles():
     for i in range(20):
         jj.append(rec(f"e{i:03d}", f"剪辑教程实战{i}集", 10 + i))
     # 反馈赢家：自家品 b000 前一日想要 10，当日涨到 40（b000 在 b 系列首位 = ppt[12]）
-    ppt[12] = rec("b000", "AI绘画变现课0节", 40)
+    ppt[12] = rec("b000", "AI绘画副业课0节", 40)
     return {"PPT模板": ppt, "剪辑教程": jj}
 
 
@@ -81,6 +81,9 @@ def main() -> int:
     # 状态机/门槛回归固定走字符窗路径（合成语料按字符窗构造，不依赖 jieba 是否安装）
     jieba_backup = config.SNOWBALL_USE_JIEBA
     config.SNOWBALL_USE_JIEBA = False
+    # 生产可能关掉新词挖掘（SNOWBALL_ADMIT_NEW=False，2026-10-26 起默认关）；本回归要测准入路径本身，强制开
+    admit_backup = config.SNOWBALL_ADMIT_NEW
+    config.SNOWBALL_ADMIT_NEW = True
 
     conn = db.get_conn(DB_PATH)
     db.init_db(conn)
@@ -90,10 +93,10 @@ def main() -> int:
     # ---------- Day 1：挖词 + 门槛 + 准入 ----------
     d1 = "2026-10-01"
     db.replace_snapshots(conn, "2026-09-30", db.get_crawl_words(conn)["PPT模板"],
-                         [rec("b000", "AI绘画变现课0节", 10)])   # 反馈基线：想要 10
+                         [rec("b000", "AI绘画副业课0节", 10)])   # 反馈基线：想要 10
     PUBLISH_LOG.write_text(json.dumps(
         {"ts": f"{d1}T09:00:00", "item_id": "b000", "name": "AI绘画",
-         "title": "AI绘画变现课0节", "price": 0.19, "link": "https://x/1"},
+         "title": "AI绘画副业课0节", "price": 0.19, "link": "https://x/1"},
         ensure_ascii=False) + "\n", encoding="utf-8")
 
     sb = crawl_and_run(conn, FakeFetcher(), d1, day1_titles())
@@ -104,7 +107,7 @@ def main() -> int:
     assert len(kaoyan) == 1 and len(kaoyan[0]) == 4 \
         and not any(ch.isdigit() for ch in kaoyan[0]), admitted   # 族代表：具体短语
     assert "考研" not in admitted, admitted            # 宽词让位密度更高的具体短语
-    assert any("绘画" in w or "变现" in w for w in admitted), admitted  # 反馈加权（族代表词不定）
+    assert any("绘画" in w or "副业" in w for w in admitted), admitted  # 反馈加权（族代表词不定）
     assert "收纳整理好物" in admitted, admitted                     # 联想补位
     for w in admitted:                                             # 黑名单绝不进
         assert "网课" not in w, admitted
@@ -208,6 +211,7 @@ def main() -> int:
             print("jieba 未安装，跳过词级路径（回落字符窗）")
     finally:
         config.SNOWBALL_USE_JIEBA = jieba_backup
+        config.SNOWBALL_ADMIT_NEW = admit_backup
 
     print("\n全部断言通过 ✅")
     shutil.rmtree(TMP, ignore_errors=True)

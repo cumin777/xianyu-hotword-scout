@@ -366,6 +366,13 @@ def admit(conn, run_date: str, fetcher: BaseFetcher,
         if any(c.word in w for w in fb["titles"]):
             c.tier = 1
 
+    # 修饰词表不受挖掘开关影响（publisher copywriter 标题长尾还吃它，停了 7 天就过期失联）
+    write_ngram_top(modifiers, out_dir or config.RUNTIME_DIR)
+    s.ngram_top_n = len(modifiers)
+    if not config.SNOWBALL_ADMIT_NEW:
+        s.rejects["挖掘关闭"] = len(ngram_cands) + len(suggest_cands)
+        return s
+
     passed: list[Candidate] = []
     for c in ngram_cands + suggest_cands:
         reason = gate(c, pool_words)
@@ -396,9 +403,6 @@ def admit(conn, run_date: str, fetcher: BaseFetcher,
                 + (" 反馈加权" if c.tier == 1 else "")) for c in chosen], run_date)
     s.admits = [{"word": w, "source": c.source, "score": c.score, "hits": c.hits}
                 for w, c in zip(inserted, chosen)]
-
-    write_ngram_top(modifiers, out_dir or config.RUNTIME_DIR)
-    s.ngram_top_n = len(modifiers)
     return s
 
 
